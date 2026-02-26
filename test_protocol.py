@@ -30,11 +30,10 @@ from bladder_sim.tissue_properties import (
 from bladder_sim.model import (
     TORSO_RX,
     TORSO_RY,
-    BLADDER_ASPECT,
-    BLADDER_CENTER_Y,
     BLADDER_BASE_Z,
-    BLADDER_WALL_THICK_EMPTY,
     bladder_wall_thickness,
+    bladder_semi_axes,
+    bladder_center_y,
     SKIN_THICK,
     FAT_THICK,
     MUSCLE_THICK,
@@ -60,9 +59,8 @@ def compute_predictions():
     pred["volumes_mL"] = volumes
     bladder_dims = {}
     for vol in volumes:
-        k = (vol / ((4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT))) ** (1.0 / 3.0)
-        dims = BLADDER_ASPECT * k
-        bladder_dims[vol] = dims * 2  # diameters in cm
+        a, b, c = bladder_semi_axes(vol)
+        bladder_dims[vol] = np.array([a, b, c]) * 2  # diameters in cm
     pred["bladder_dims"] = bladder_dims
 
     # Tissue conductivities at key frequencies
@@ -111,7 +109,7 @@ def compute_predictions():
     pred["skin_thick_cm"] = SKIN_THICK
     pred["fat_thick_cm"] = FAT_THICK
     pred["muscle_thick_cm"] = MUSCLE_THICK
-    pred["bladder_center_anterior_cm"] = BLADDER_CENTER_Y
+    pred["bladder_center_anterior_cm"] = bladder_center_y(300)
 
     # Baseline impedance estimate (whole-body path, ~50 kHz)
     # Rough: muscle path ~20 cm at 0.35 S/m through ~100 cm^2 cross-section

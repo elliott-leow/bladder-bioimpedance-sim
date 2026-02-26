@@ -23,7 +23,7 @@ figures           : Publication-quality visualization
 from .tissue_properties import get_conductivity, get_contact_impedance
 from .mesh import create_torso_mesh
 from .fem import ForwardModel, Image, forward_solve, compute_transfer_impedance
-from .model import build_pelvis_model, get_bladder_mask, bladder_wall_thickness
+from .model import build_pelvis_model, get_bladder_mask, bladder_wall_thickness, bladder_semi_axes, bladder_center_y
 from .analysis import (
     run_sensitivity_analysis,
     optimize_stim_patterns,

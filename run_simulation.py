@@ -148,7 +148,12 @@ def main():
     freq_results = None
     if not args.no_freq:
         print("\n===== STEP 4: Frequency Sweep =====")
-        freqs = np.logspace(np.log10(1), np.log10(500), 12)
+        # Dense sampling in 10-100 kHz (clinical bioimpedance sweet spot)
+        freqs = np.sort(np.unique(np.concatenate([
+            np.logspace(np.log10(1), np.log10(10), 5),      # 1-10 kHz: 5 pts
+            np.logspace(np.log10(10), np.log10(100), 12),    # 10-100 kHz: 12 pts
+            np.logspace(np.log10(100), np.log10(500), 5),    # 100-500 kHz: 5 pts
+        ])))
         freq_results = frequency_sweep(fmdl, freqs_kHz=freqs)
     else:
         print("\n===== STEP 4: Frequency Sweep (SKIPPED) =====")

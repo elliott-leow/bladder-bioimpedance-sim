@@ -29,7 +29,7 @@ from .fem import (
     build_cross_ring_stim_patterns,
     build_adjacent_stim_patterns,
 )
-from .tissue_properties import get_conductivity, get_contact_impedance
+from .tissue_properties import get_conductivity, get_contact_impedance, get_complex_admittivity
 
 
 # =====================================================================
@@ -43,16 +43,24 @@ SKIN_THICK = 0.2
 FAT_THICK = 1.5
 MUSCLE_THICK = 1.5
 
-# Bladder ellipsoid aspect ratio [lateral : AP : SI]
-BLADDER_ASPECT = np.array([5.0, 4.0, 5.0])
-BLADDER_CENTER_Y = 3.0    # anterior position (behind pubic symphysis)
-BLADDER_BASE_Z = 3.0      # base height above model origin
+# Bladder geometry — volume-dependent anisotropic expansion
+# Based on Glass Clark & Nagle et al. 2020 (PMC6538469), Nagle et al. 2018.
+# The bladder expands preferentially in the craniocaudal (S-I) direction;
+# at low volume it is oblate, becoming near-spherical when full.
+# Reference semi-axes at 300 mL [lateral, AP, SI] in cm:
+BLADDER_ASPECT_REF = np.array([5.0, 4.0, 5.3])
+# Volume at which the reference aspect ratio applies:
+BLADDER_REF_VOLUME = 300.0
+BLADDER_CENTER_Y_EMPTY = 3.0   # Y at low volume (anterior, behind pubic symphysis)
+BLADDER_CENTER_Y_FULL = 2.5    # Y at high volume (small posterior shift ~0.5 cm)
+BLADDER_BASE_Z = 3.0           # base height above model origin (trigone, fixed)
 
 # Wall thickness decreases as bladder distends (detrusor muscle stretching).
-# Sonographic data: Oelke et al. 2006, Hakenberg et al. 2000, SAGE J. 2018.
-#   BWT ≈ 2.8 mm nearly empty → ≈ 1.5 mm at 500 mL
-BLADDER_WALL_THICK_EMPTY = 0.28  # cm, near-empty bladder
-BLADDER_WALL_THICK_FULL = 0.15   # cm, at ~500 mL
+# Nonlinear: rapid decrease <250 mL, then plateau (Oelke et al. 2006,
+# Ugwu et al. 2019).  Modeled with geometric surface-area scaling + floor.
+BLADDER_WALL_THICK_REF = 0.28  # cm, BWT at 50 mL reference
+BLADDER_WALL_REF_VOLUME = 50.0
+BLADDER_WALL_THICK_MIN = 0.13  # cm, plateau DWT (Oelke 2006: men 1.4 mm)
 
 # Default electrode configuration
 DEFAULT_N_PER_RING = 16
@@ -69,13 +77,67 @@ PROSTATE_SEMI = np.array([2.0, 1.5, 1.25])   # 4.0 x 3.0 x 2.5 cm total
 def bladder_wall_thickness(volume_mL: float) -> float:
     """Volume-dependent bladder wall thickness in cm.
 
-    The detrusor muscle thins as the bladder distends.  Based on
-    sonographic measurements (Oelke et al. 2006, Hakenberg et al. 2000):
-        BWT ≈ 2.8 mm when nearly empty, ≈ 1.5 mm at 500 mL.
+    Uses geometric surface-area scaling with an asymptotic minimum,
+    matching the nonlinear pattern from sonographic data:
+      - Rapid decrease <250 mL (rugae unfolding + stretching)
+      - Plateau at ~1.3 mm for men (Oelke et al. 2006, Ugwu et al. 2019)
+
+    BWT ≈ t_ref * (V_ref / V)^(2/3), floored at t_min.
     """
-    frac = min(volume_mL, 500.0) / 500.0
-    thick = BLADDER_WALL_THICK_EMPTY - (BLADDER_WALL_THICK_EMPTY - BLADDER_WALL_THICK_FULL) * frac
-    return max(thick, 0.12)  # absolute minimum 1.2 mm
+    V = max(volume_mL, BLADDER_WALL_REF_VOLUME)
+    t_geometric = BLADDER_WALL_THICK_REF * (BLADDER_WALL_REF_VOLUME / V) ** (2.0 / 3.0)
+    return max(t_geometric, BLADDER_WALL_THICK_MIN)
+
+
+def bladder_semi_axes(volume_mL: float) -> Tuple[float, float, float]:
+    """Volume-dependent bladder semi-axes (a_lat, b_ap, c_si) in cm.
+
+    The bladder expands anisotropically (Glass Clark & Nagle et al. 2020):
+      - At low volumes: oblate (wider than tall)
+      - At high volumes: near-spherical (H:W ≈ 1.06)
+
+    The S-I axis grows faster than lateral/AP axes.  Implemented by
+    interpolating the SI:lateral ratio from ~0.85 (50 mL, oblate) to
+    ~1.06 (500 mL, near-spherical), per ultrasound strain data.
+    """
+    # Compute isotropic scale factor from reference volume
+    V_ref = (4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT_REF)
+    k = (volume_mL / V_ref) ** (1.0 / 3.0)
+
+    # Volume-dependent SI:lateral ratio
+    # At 50 mL  → 0.85 (oblate)
+    # At 300 mL → 1.06 (reference, Glass Clark 2020)
+    # At 500 mL → 1.06 (plateau)
+    frac = np.clip((volume_mL - 50.0) / 250.0, 0.0, 1.0)
+    si_lat_ratio = 0.85 + (1.06 - 0.85) * frac  # 0.85 → 1.06
+
+    # Apply anisotropic correction: boost SI, reduce lateral to conserve volume
+    # ratio = c_si / a_lat  →  c_si *= correction, a_lat *= 1/sqrt(correction)
+    ref_ratio = BLADDER_ASPECT_REF[2] / BLADDER_ASPECT_REF[0]  # 5.3/5.0 = 1.06
+    correction = si_lat_ratio / ref_ratio  # adjust relative to reference
+    # Volume conservation: a * b * c = const → if c *= f, then a,b *= 1/sqrt(f)
+    lat_corr = 1.0 / np.sqrt(correction)
+
+    a = BLADDER_ASPECT_REF[0] * k * lat_corr
+    b = BLADDER_ASPECT_REF[1] * k * lat_corr
+    c = BLADDER_ASPECT_REF[2] * k * correction
+
+    return a, b, c
+
+
+def bladder_center_y(volume_mL: float) -> float:
+    """Volume-dependent bladder center Y position in cm.
+
+    The bladder base (trigone) is fixed at the pelvic floor.  At low
+    volumes the bladder sits anteriorly, nestled behind the pubic
+    symphysis.  As it fills, the dome expands posteriorly (the anterior
+    wall is constrained by the pubis) and superiorly, so the geometric
+    centre shifts backward.
+
+    Returns the Y coordinate of the bladder center (cm).
+    """
+    frac = np.clip((volume_mL - 50.0) / 450.0, 0.0, 1.0)
+    return BLADDER_CENTER_Y_EMPTY + (BLADDER_CENTER_Y_FULL - BLADDER_CENTER_Y_EMPTY) * frac
 
 
 def build_pelvis_model(
@@ -89,6 +151,7 @@ def build_pelvis_model(
     stim_pattern: str = "cross_ring",
     current_A: float = DEFAULT_CURRENT_A,
     fat_thick: Optional[float] = None,
+    use_complex: bool = False,
 ) -> Tuple[ForwardModel, Image]:
     """
     Build a 3D pelvis model with multi-ring electrode array.
@@ -118,6 +181,10 @@ def build_pelvis_model(
         Subcutaneous fat layer thickness in cm. Defaults to module-level
         FAT_THICK (1.5 cm). This is the dominant source of inter-subject
         variability in bioimpedance measurements (Leonhardt et al. 2025).
+    use_complex : bool
+        If True, assign complex admittivity (sigma + j*omega*eps_0*eps_r)
+        instead of real conductivity.  This enables impedance phase
+        analysis.
 
     Returns
     -------
@@ -181,7 +248,8 @@ def build_pelvis_model(
     # Only print verbose summary on first build (when mesh is created, not reused)
     img = _assign_conductivities(fmdl, bladder_volume_mL, freq_kHz,
                                  fat_thick=fat_thick,
-                                 verbose=(mesh_was_created))
+                                 verbose=(mesh_was_created),
+                                 use_complex=use_complex)
 
     return fmdl, img
 
@@ -189,6 +257,7 @@ def build_pelvis_model(
 def _assign_conductivities(
     fmdl: ForwardModel, bladder_volume_mL: float, freq_kHz: float,
     fat_thick: float = FAT_THICK, verbose: bool = True,
+    use_complex: bool = False,
 ) -> Image:
     """
     Assign frequency-dependent tissue conductivities to mesh elements.
@@ -199,16 +268,24 @@ def _assign_conductivities(
         3. Pelvic bone
         4. Soft organs (bowel, rectum, vessels, peritoneal)
         5. Bladder (wall + urine) — highest priority
+
+    If use_complex is True, assigns complex admittivity
+    (sigma + j*omega*eps_0*eps_r) instead of real conductivity.
     """
     mesh = fmdl.mesh
     ec = mesh.element_centroids()
     cx, cy, cz = ec[:, 0], ec[:, 1], ec[:, 2]
     n_elem = mesh.n_elements
 
-    sigma = get_conductivity
+    if use_complex:
+        sigma = get_complex_admittivity
+        dtype = complex
+    else:
+        sigma = get_conductivity
+        dtype = float
 
     # Initialize with background
-    elem_data = np.full(n_elem, sigma("background", freq_kHz))
+    elem_data = np.full(n_elem, sigma("background", freq_kHz), dtype=dtype)
 
     # ==================== CONCENTRIC SHELLS ====================
     # Shell thicknesses: skin 2mm, fat 0.5-4cm (varies with BMI), muscle ~1.5cm
@@ -352,16 +429,12 @@ def _assign_conductivities(
     elem_data[is_prostate] = sigma("prostate", freq_kHz)
 
     # ==================== BLADDER (highest priority) ====================
-    k = (bladder_volume_mL / ((4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT))) ** (
-        1.0 / 3.0
-    )
-    bl_a = BLADDER_ASPECT[0] * k
-    bl_b = BLADDER_ASPECT[1] * k
-    bl_c = BLADDER_ASPECT[2] * k
+    bl_a, bl_b, bl_c = bladder_semi_axes(bladder_volume_mL)
+    bl_cy = bladder_center_y(bladder_volume_mL)
     bl_cz = BLADDER_BASE_Z + bl_c
 
     bx = cx / bl_a
-    by = (cy - BLADDER_CENTER_Y) / bl_b
+    by = (cy - bl_cy) / bl_b
     bz = (cz - bl_cz) / bl_c
     r_bl = np.sqrt(bx ** 2 + by ** 2 + bz ** 2)
     avg_bl = (bl_a + bl_b + bl_c) / 3.0
@@ -438,16 +511,12 @@ def get_bladder_mask(
     ec = mesh.element_centroids()
     cx, cy, cz = ec[:, 0], ec[:, 1], ec[:, 2]
 
-    k = (bladder_volume_mL / ((4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT))) ** (
-        1.0 / 3.0
-    )
-    bl_a = BLADDER_ASPECT[0] * k
-    bl_b = BLADDER_ASPECT[1] * k
-    bl_c = BLADDER_ASPECT[2] * k
+    bl_a, bl_b, bl_c = bladder_semi_axes(bladder_volume_mL)
+    bl_cy = bladder_center_y(bladder_volume_mL)
     bl_cz = BLADDER_BASE_Z + bl_c
 
     bx = cx / bl_a
-    by = (cy - BLADDER_CENTER_Y) / bl_b
+    by = (cy - bl_cy) / bl_b
     bz = (cz - bl_cz) / bl_c
     r_bl = np.sqrt(bx ** 2 + by ** 2 + bz ** 2)
     avg_bl = (bl_a + bl_b + bl_c) / 3.0
@@ -573,16 +642,12 @@ def get_tissue_labels(
     labels[(r_prostate < 1) & ~is_bone] = 11
 
     # Bladder (highest priority)
-    k = (bladder_volume_mL / ((4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT))) ** (
-        1.0 / 3.0
-    )
-    bl_a = BLADDER_ASPECT[0] * k
-    bl_b = BLADDER_ASPECT[1] * k
-    bl_c = BLADDER_ASPECT[2] * k
+    bl_a, bl_b, bl_c = bladder_semi_axes(bladder_volume_mL)
+    bl_cy = bladder_center_y(bladder_volume_mL)
     bl_cz = BLADDER_BASE_Z + bl_c
 
     bx = cx / bl_a
-    by = (cy - BLADDER_CENTER_Y) / bl_b
+    by = (cy - bl_cy) / bl_b
     bz = (cz - bl_cz) / bl_c
     r_bl = np.sqrt(bx ** 2 + by ** 2 + bz ** 2)
     avg_bl = (bl_a + bl_b + bl_c) / 3.0

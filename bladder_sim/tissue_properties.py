@@ -88,6 +88,118 @@ CONDUCTIVITY_DB["bowel_eff"] = (
     + 0.40 * CONDUCTIVITY_DB["colon_wall"]
 )
 
+# =====================================================================
+# Relative permittivity tables (dimensionless)
+# Gabriel S, Lau RW, Gabriel C. Phys. Med. Biol. 41:2271, 1996.
+# IT'IS Foundation v4.1.  Rows correspond to FREQ_TABLE_KHZ.
+# At bioimpedance frequencies (1-500 kHz), permittivity contributes
+# a reactive (imaginary) component to the complex admittivity:
+#   gamma = sigma + j * omega * epsilon_0 * epsilon_r
+# =====================================================================
+
+PERMITTIVITY_DB = {
+    # Skin (dry): huge low-freq permittivity from alpha dispersion, drops fast
+    "skin": np.array([1.1e5, 3.3e4, 1.5e4, 5.6e3, 2.8e3, 1.4e3, 7.0e2, 3.5e2]),
+
+    # Fat: low permittivity, weak dispersion
+    "fat": np.array([1.5e4, 6.0e3, 3.0e3, 1.2e3, 6.0e2, 3.0e2, 1.5e2, 8.0e1]),
+
+    # Skeletal muscle: strong beta dispersion
+    "muscle": np.array([4.0e5, 1.1e5, 4.0e4, 1.2e4, 6.0e3, 2.5e3, 1.0e3, 4.0e2]),
+
+    # Bladder wall (smooth muscle): moderate beta dispersion
+    "bladder_wall": np.array([2.5e5, 7.0e4, 2.8e4, 9.0e3, 4.0e3, 1.8e3, 8.0e2, 3.5e2]),
+
+    # Urine: ionic solution — very low permittivity (near water ~80)
+    "urine": np.array([80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0]),
+
+    # Cortical bone
+    "bone_cortical": np.array([5.0e3, 2.0e3, 1.2e3, 6.0e2, 3.5e2, 2.0e2, 1.2e2, 7.0e1]),
+
+    # Cancellous bone
+    "bone_cancellous": np.array([8.0e4, 2.5e4, 1.2e4, 4.0e3, 2.0e3, 9.0e2, 4.5e2, 2.0e2]),
+
+    # Blood
+    "blood": np.array([5.0e3, 3.5e3, 3.0e3, 2.5e3, 2.0e3, 1.5e3, 8.0e2, 4.0e2]),
+
+    # Colon wall
+    "colon_wall": np.array([3.0e5, 8.0e4, 3.5e4, 1.1e4, 5.0e3, 2.2e3, 1.0e3, 4.0e2]),
+
+    # Small intestine wall
+    "si_wall": np.array([4.0e5, 1.2e5, 5.0e4, 1.5e4, 7.0e3, 3.0e3, 1.2e3, 5.0e2]),
+
+    # Bowel gas (air: permittivity ~1)
+    "bowel_gas": np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+
+    # Bowel fluid
+    "bowel_fluid": np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]),
+
+    # Rectum wall
+    "rectum": np.array([3.5e5, 9.0e4, 3.8e4, 1.2e4, 5.5e3, 2.4e3, 1.1e3, 4.2e2]),
+
+    # Peritoneal fluid (ionic: low permittivity)
+    "peritoneal": np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]),
+
+    # Prostate (glandular tissue)
+    "prostate": np.array([3.0e5, 8.5e4, 3.5e4, 1.1e4, 5.0e3, 2.2e3, 1.0e3, 4.0e2]),
+
+    # Background (connective tissue)
+    "background": np.array([2.0e5, 6.0e4, 2.5e4, 8.0e3, 3.5e3, 1.5e3, 7.0e2, 3.0e2]),
+}
+
+# Weighted averages to match conductivity DB
+PERMITTIVITY_DB["bone_avg"] = (
+    0.4 * PERMITTIVITY_DB["bone_cortical"]
+    + 0.6 * PERMITTIVITY_DB["bone_cancellous"]
+)
+PERMITTIVITY_DB["bowel_eff"] = (
+    0.30 * PERMITTIVITY_DB["bowel_gas"]
+    + 0.30 * PERMITTIVITY_DB["bowel_fluid"]
+    + 0.40 * PERMITTIVITY_DB["colon_wall"]
+)
+
+EPSILON_0 = 8.854187817e-12  # vacuum permittivity (F/m)
+
+_perm_interpolators = {}
+
+
+def _get_perm_interpolator(tissue: str) -> PchipInterpolator:
+    if tissue not in _perm_interpolators:
+        if tissue not in PERMITTIVITY_DB:
+            raise ValueError(f"Unknown tissue '{tissue}' for permittivity.")
+        _perm_interpolators[tissue] = PchipInterpolator(
+            FREQ_TABLE_KHZ, PERMITTIVITY_DB[tissue]
+        )
+    return _perm_interpolators[tissue]
+
+
+def get_permittivity(tissue: str, freq_kHz: float) -> float:
+    """Get relative permittivity at a given frequency."""
+    return float(_get_perm_interpolator(tissue)(freq_kHz))
+
+
+def get_complex_admittivity(tissue: str, freq_kHz: float) -> complex:
+    """
+    Get complex admittivity gamma = sigma + j*omega*epsilon_0*epsilon_r.
+
+    Parameters
+    ----------
+    tissue : str
+        Tissue name.
+    freq_kHz : float
+        Frequency in kHz.
+
+    Returns
+    -------
+    complex
+        Admittivity in S/m.
+    """
+    sigma = get_conductivity(tissue, freq_kHz)
+    eps_r = get_permittivity(tissue, freq_kHz)
+    omega = 2.0 * np.pi * freq_kHz * 1e3
+    return complex(sigma, omega * EPSILON_0 * eps_r)
+
+
 # Electrode-skin contact impedance (Ohm*cm^2)
 # Rosell 1988, McAdams 1996, Yang 2017.
 # Ag/AgCl electrodes with conductive gel on abdominal skin.

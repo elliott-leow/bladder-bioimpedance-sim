@@ -103,7 +103,8 @@ def assemble_stiffness_matrix(mesh: TorsoMesh, sigma: np.ndarray) -> sparse.csr_
     # Element stiffness: K_local[e,i,j] = sigma[e] * vol[e] * (grad_i · grad_j)
     sv = sigma * vol  # (M,)
     K_local = np.einsum("eik,ejk->eij", grad_phi, grad_phi)  # (M, 4, 4)
-    K_local *= sv[:, None, None]
+    # Use multiplication (not *=) to allow float->complex promotion
+    K_local = K_local * sv[:, None, None]
 
     # Assemble into sparse matrix
     rows = elems[:, :, None].repeat(4, axis=2).ravel()

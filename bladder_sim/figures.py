@@ -28,9 +28,9 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from .model import (
-    TISSUE_NAMES, TISSUE_COLORS, BLADDER_ASPECT, BLADDER_BASE_Z,
-    BLADDER_CENTER_Y, TORSO_RX, TORSO_RY, TORSO_H,
-    get_tissue_labels, get_bladder_mask,
+    TISSUE_NAMES, TISSUE_COLORS, BLADDER_BASE_Z,
+    TORSO_RX, TORSO_RY, TORSO_H,
+    get_tissue_labels, get_bladder_mask, bladder_semi_axes, bladder_center_y,
 )
 from .mesh import TorsoMesh, compute_electrode_positions
 from .analysis import get_angular_sep
@@ -98,15 +98,15 @@ def _draw_torso_wireframe(ax, alpha=0.08, color="steelblue"):
 
 def _draw_bladder_3d(ax, volume_mL=300, color="gold", alpha=0.55, label=None):
     """Draw bladder ellipsoid surface."""
-    k = (volume_mL / ((4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT))) ** (1.0 / 3.0)
-    a, b, c = BLADDER_ASPECT * k
+    a, b, c = bladder_semi_axes(volume_mL)
+    cy = bladder_center_y(volume_mL)
     cz = BLADDER_BASE_Z + c
 
     u = np.linspace(0, np.pi, 25)
     v = np.linspace(0, 2 * np.pi, 35)
     U, V = np.meshgrid(u, v)
     X = a * np.sin(U) * np.cos(V)
-    Y = b * np.sin(U) * np.sin(V) + BLADDER_CENTER_Y
+    Y = b * np.sin(U) * np.sin(V) + cy
     Z = c * np.cos(U) + cz
     ax.plot_surface(X, Y, Z, alpha=alpha, color=color,
                     edgecolor="none", label=label)
@@ -531,12 +531,12 @@ def _fig5_frequency_response(results: Dict, fig_dir: Path):
     ax = axes[0, 1]
     ax.semilogx(freqs, freq_snr, "-o", color=WONG["vermillion"], lw=2.5, ms=5)
     spk = np.argmax(freq_snr)
-    ax.plot(freqs[spk], freq_snr[spk], "rp", ms=14)
+    ax.plot(freqs[spk], freq_snr[spk], "kp", ms=14)
     ax.annotate(f"{freqs[spk]:.0f} kHz\nSNR = {freq_snr[spk]:.2f}",
                 (freqs[spk], freq_snr[spk]),
                 textcoords="offset points", xytext=(12, -18), fontsize=10,
-                fontweight="bold", color="red",
-                arrowprops=dict(arrowstyle="->", color="red", lw=1.5))
+                fontweight="bold", color="black",
+                arrowprops=dict(arrowstyle="->", color="black", lw=1.5))
     ax.set_xlabel("Frequency (kHz)")
     ax.set_ylabel("SNR per mL")
     ax.set_title("(b) SNR vs frequency")
@@ -577,12 +577,12 @@ def _fig5_frequency_response(results: Dict, fig_dir: Path):
     ax = axes[1, 2]
     ax.semilogx(freqs, opt_snr, "-^", color=WONG["vermillion"], lw=2.5, ms=5)
     ospk = np.argmax(opt_snr)
-    ax.plot(freqs[ospk], opt_snr[ospk], "rp", ms=12)
+    ax.plot(freqs[ospk], opt_snr[ospk], "kp", ms=12)
     ax.annotate(f"{freqs[ospk]:.0f} kHz\nSNR = {opt_snr[ospk]:.2f}",
                 (freqs[ospk], opt_snr[ospk]),
                 textcoords="offset points", xytext=(12, -18), fontsize=10,
-                fontweight="bold", color="red",
-                arrowprops=dict(arrowstyle="->", color="red", lw=1.5))
+                fontweight="bold", color="black",
+                arrowprops=dict(arrowstyle="->", color="black", lw=1.5))
     ax.set_xlabel("Frequency (kHz)")
     ax.set_ylabel("SNR per mL")
     ax.set_title("(f) Optimal config: SNR")
