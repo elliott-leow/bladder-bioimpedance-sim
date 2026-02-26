@@ -35,13 +35,35 @@ from .tissue_properties import get_conductivity, get_contact_impedance, get_comp
 # =====================================================================
 # Default geometry (cm)
 # =====================================================================
-TORSO_RX = 15.0   # lateral half-width
-TORSO_RY = 10.0   # AP half-depth
-TORSO_H = 20.0    # total height
+# The body core (skeleton + muscle) has fixed dimensions independent of BMI.
+# Fat and skin are added OUTSIDE the core, so the torso surface grows with BMI.
+#
+# At the default fat thickness (1.5 cm), these yield the original
+# TORSO_RX=15.0, TORSO_RY=10.0 for backward compatibility.
+BODY_CORE_RX = 13.3   # lateral half-width of muscle outer boundary
+BODY_CORE_RY = 8.3    # AP half-depth of muscle outer boundary
+TORSO_H = 20.0        # total height (fixed)
 
 SKIN_THICK = 0.2
-FAT_THICK = 1.5
+FAT_THICK = 1.5       # default subcutaneous fat thickness
 MUSCLE_THICK = 1.5
+
+
+def torso_dimensions(fat_thick: float = FAT_THICK):
+    """Compute outer torso radii from fat thickness.
+
+    The torso surface = body core + muscle layer is fixed, then fat and
+    skin are added on top. More fat → larger torso.
+
+    Returns (rx, ry) in cm.
+    """
+    rx = BODY_CORE_RX + fat_thick + SKIN_THICK
+    ry = BODY_CORE_RY + fat_thick + SKIN_THICK
+    return rx, ry
+
+
+# Default torso radii at FAT_THICK=1.5 (backward compatible: 15.0, 10.0)
+TORSO_RX, TORSO_RY = torso_dimensions(FAT_THICK)
 
 # Bladder geometry — volume-dependent anisotropic expansion
 # Based on Glass Clark & Nagle et al. 2020 (PMC6538469), Nagle et al. 2018.
@@ -199,6 +221,9 @@ def build_pelvis_model(
     n_rings = len(ring_z)
     n_elec = n_per_ring * n_rings
 
+    # Compute BMI-dependent torso outer dimensions
+    torso_rx, torso_ry = torso_dimensions(fat_thick)
+
     # --- Build or reuse mesh ---
     mesh_was_created = mesh is None
     if mesh is None:
@@ -208,14 +233,15 @@ def build_pelvis_model(
         print(f"  Total electrodes: {n_elec}")
         print(f"  Electrode radius: {elec_radius:.2f} cm")
         print(f"  Max element edge: {max_edge:.2f} cm")
+        print(f"  Torso radii:      {torso_rx:.1f} x {torso_ry:.1f} cm (fat={fat_thick:.1f} cm)")
 
         # Compute electrode positions on the ellipsoidal surface
-        elec_pos = compute_electrode_positions(TORSO_RX, TORSO_RY, n_per_ring, ring_z)
+        elec_pos = compute_electrode_positions(torso_rx, torso_ry, n_per_ring, ring_z)
 
         z_c = get_contact_impedance(freq_kHz)
         mesh = create_torso_mesh(
-            rx=TORSO_RX,
-            ry=TORSO_RY,
+            rx=torso_rx,
+            ry=torso_ry,
             height=TORSO_H,
             max_edge=max_edge,
             electrode_positions=elec_pos,
@@ -288,11 +314,13 @@ def _assign_conductivities(
     elem_data = np.full(n_elem, sigma("background", freq_kHz), dtype=dtype)
 
     # ==================== CONCENTRIC SHELLS ====================
-    # Shell thicknesses: skin 2mm, fat 0.5-4cm (varies with BMI), muscle ~1.5cm
-    inner_skin_rx = TORSO_RX - SKIN_THICK
-    inner_skin_ry = TORSO_RY - SKIN_THICK
+    # Outer surface grows with fat; internal body core is fixed.
+    torso_rx, torso_ry = torso_dimensions(fat_thick)
+    inner_skin_rx = torso_rx - SKIN_THICK
+    inner_skin_ry = torso_ry - SKIN_THICK
     inner_fat_rx = inner_skin_rx - fat_thick
     inner_fat_ry = inner_skin_ry - fat_thick
+    # inner_fat should equal BODY_CORE_RX, BODY_CORE_RY
     inner_muscle_rx = inner_fat_rx - MUSCLE_THICK
     inner_muscle_ry = inner_fat_ry - MUSCLE_THICK
 
@@ -526,7 +554,8 @@ def get_bladder_mask(
 
 
 def get_tissue_labels(
-    mesh: TorsoMesh, bladder_volume_mL: float = 300.0
+    mesh: TorsoMesh, bladder_volume_mL: float = 300.0,
+    fat_thick: Optional[float] = None,
 ) -> np.ndarray:
     """
     Assign a tissue label index to each element.
@@ -539,17 +568,20 @@ def get_tissue_labels(
         5=bowel, 6=rectum, 7=vessels, 8=peritoneal,
         9=bladder_wall, 10=urine
     """
+    if fat_thick is None:
+        fat_thick = FAT_THICK
     ec = mesh.element_centroids()
     cx, cy, cz = ec[:, 0], ec[:, 1], ec[:, 2]
     n_elem = mesh.n_elements
 
     labels = np.zeros(n_elem, dtype=np.int32)  # 0 = background
 
-    # Shells
-    inner_skin_rx = TORSO_RX - SKIN_THICK
-    inner_skin_ry = TORSO_RY - SKIN_THICK
-    inner_fat_rx = inner_skin_rx - FAT_THICK
-    inner_fat_ry = inner_skin_ry - FAT_THICK
+    # Shells — outer surface grows with fat, core is fixed
+    torso_rx, torso_ry = torso_dimensions(fat_thick)
+    inner_skin_rx = torso_rx - SKIN_THICK
+    inner_skin_ry = torso_ry - SKIN_THICK
+    inner_fat_rx = inner_skin_rx - fat_thick
+    inner_fat_ry = inner_skin_ry - fat_thick
     inner_muscle_rx = inner_fat_rx - MUSCLE_THICK
     inner_muscle_ry = inner_fat_ry - MUSCLE_THICK
 

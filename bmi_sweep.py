@@ -20,7 +20,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from bladder_sim.model import build_pelvis_model, TORSO_RX, TORSO_RY
+from bladder_sim.model import build_pelvis_model, TORSO_RX, TORSO_RY, torso_dimensions
 from bladder_sim.fem import compute_transfer_impedance
 
 N_PER_RING = 4
