@@ -1,0 +1,555 @@
+\documentclass[11pt, a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\graphicspath{{../figures/}}
+\usepackage{booktabs}
+\usepackage{amsmath, amssymb}
+\usepackage{siunitx}
+\sisetup{per-mode=symbol}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, citecolor=green!50!black, urlcolor=blue!70!black}
+\usepackage{caption, subcaption}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{natbib}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+  backgroundcolor=\color{gray!8},
+  xleftmargin=1em,
+  framexleftmargin=0.5em,
+}
+
+\title{Non-Invasive Bladder Volume Monitoring\\via Pelvic Bioimpedance\\[0.5em]
+\large 3D FEM Simulation with SVD-Optimal Electrode Drive Patterns}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present a 3D finite-element simulation of pelvic bioimpedance for non-invasive bladder volume monitoring. The model includes 15 tissue types with frequency-dependent conductivities, the Complete Electrode Model for realistic electrode contact, and anisotropic volume-dependent bladder geometry based on ultrasound literature. We compare two practical configurations using the same 8-electrode suprapubic belt: (1) conventional 4-electrode tetrapolar measurement at \SI{0.22}{\milli\ohm\per\milli\litre}, and (2) SVD-optimal 8-electrode drive patterns at \SI{0.94}{\milli\ohm\per\milli\litre}---a $4.3\times$ improvement requiring only a firmware change. A complete signal processing algorithm (band-stop respiratory filter, low-pass cardiac filter, polynomial detrending, void-event calibration) extracts the bladder filling trend from artifacts. BMI analysis confirms that a single set of SVD drive weights achieves $>98\%$ efficiency across all body types. The 8-electrode SVD configuration meets the clinical target of \SI{0.1}{\milli\litre\per\kilo\gram\per\hour} ($\sim$\SI{7}{\milli\litre} at \SI{70}{\kilo\gram}) with $\sim$\SI{6}{\milli\litre} resolution.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%% ===================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Urine output is a core vital sign for assessing kidney function in hospitalized patients. The clinical target of \SI{0.1}{\milli\litre\per\kilo\gram\per\hour} corresponds to \SI{7}{\milli\litre} at \SI{70}{\kilo\gram} body weight. Current monitoring requires an indwelling urinary catheter, which carries a 3--5\% daily risk of catheter-associated urinary tract infection (CAUTI).
+
+Bioimpedance offers a non-invasive alternative: surface electrodes inject a small alternating current (\SI{1}{\milli\ampere} at \SI{50}{\kilo\hertz}) and measure the resulting voltage. As the bladder fills with conductive urine (\SI{1.75}{\siemens\per\metre}), the measured impedance changes. The challenge is that the bladder sits deep in the pelvis---approximately \SI{6.7}{\centi\metre} behind skin, fat, muscle, and bone---and the impedance change per millilitre of urine (\SIrange{0.2}{1.0}{\milli\ohm\per\milli\litre}) is buried under respiratory artifacts that are $100\times$ larger.
+
+This report presents a simulation study comparing two electrode configurations using the same 8-electrode suprapubic belt:
+\begin{itemize}[nosep]
+  \item \textbf{4-electrode tetrapolar}: use 4 of the 8 electrodes in a standard 4-wire measurement.
+  \item \textbf{8-electrode SVD-optimal}: use all 8 electrodes with mathematically optimized drive patterns derived from singular value decomposition (SVD).
+\end{itemize}
+
+The key finding: \textbf{SVD rank-1 drive patterns give $4.3\times$ better sensitivity than tetrapolar, using identical hardware.} The improvement is purely in firmware---no additional electrodes or circuitry.
+
+%% ===================================================================
+\section{Anatomical Model}
+\label{sec:model}
+
+\subsection{Torso Geometry}
+
+The pelvis is modeled as an ellipsoidal cylinder with semi-axes $r_x$ (lateral) and $r_y$ (anteroposterior), height \SI{20}{\centi\metre}. The internal body core (skeleton + muscle) has fixed dimensions of \SI{13.3}{\centi\metre} $\times$ \SI{8.3}{\centi\metre}, with fat and skin added outside:
+\begin{equation}
+  r_x = 13.3 + t_\text{fat} + t_\text{skin}, \qquad
+  r_y = 8.3 + t_\text{fat} + t_\text{skin}
+\end{equation}
+where $t_\text{skin} = \SI{0.2}{\centi\metre}$ and $t_\text{fat}$ ranges from \SI{0.5}{\centi\metre} (lean, BMI~18) to \SI{4.5}{\centi\metre} (obese, BMI~36). At the default $t_\text{fat} = \SI{1.5}{\centi\metre}$, the outer torso is \SI{15.0}{\centi\metre} $\times$ \SI{10.0}{\centi\metre}.
+
+\subsection{Tissue Properties}
+
+The model includes 15 tissue types with frequency-dependent conductivities from Gabriel et al.~\cite{gabriel1996a,gabriel1996b,gabriel1996c} and the IT'IS Foundation v4.1 database. Table~\ref{tab:conductivity} lists values at \SI{50}{\kilo\hertz}.
+
+\begin{table}[h]
+\centering
+\caption{Tissue conductivities at \SI{50}{\kilo\hertz}.}
+\label{tab:conductivity}
+\begin{tabular}{@{}lS[table-format=1.3]l@{}}
+\toprule
+Tissue & {$\sigma$ (\si{\siemens\per\metre})} & Notes \\
+\midrule
+Skin                & 0.100 & Stratum corneum barrier \\
+Subcutaneous fat    & 0.040 & Nearly frequency-independent \\
+Skeletal muscle     & 0.350 & Transverse/longitudinal average \\
+Bone (cortical+canc.)& 0.065 & Weighted average \\
+Bowel (effective)   & 0.290 & 30\% gas + 30\% fluid + 40\% wall \\
+Rectum              & 0.380 & \\
+Blood vessels       & 0.700 & Frequency-flat below \SI{500}{\kilo\hertz} \\
+Peritoneal fluid    & 1.500 & \\
+Prostate            & 0.420 & \\
+Bladder wall        & 0.210 & Detrusor smooth muscle \\
+\textbf{Urine}     & \textbf{1.750} & \textbf{Frequency-flat (ionic solution)} \\
+Background          & 0.300 & Connective tissue / fascia \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Bladder Geometry}
+
+The bladder expands anisotropically with volume, based on ultrasound data from Glass Clark et al.~\cite{glassclarke2020} and Nagle et al.~\cite{nagle2018}. At low volumes it is oblate; at high volumes, near-spherical. The bladder base (trigone) is fixed at the pelvic floor (\SI{3.0}{\centi\metre} above the model origin). Wall thickness follows $t = t_\text{ref}(V_\text{ref}/V)^{2/3}$ with a floor at \SI{1.3}{\milli\metre}~\cite{oelke2006,ugwu2019}.
+
+\begin{table}[h]
+\centering
+\caption{Bladder dimensions versus volume.}
+\label{tab:bladder_dims}
+\begin{tabular}{@{}S[table-format=3.0]S[table-format=2.1]S[table-format=1.1]S[table-format=2.1]S[table-format=1.2]S[table-format=1.1]@{}}
+\toprule
+{Volume (\si{\milli\litre})} & {Lateral (\si{\centi\metre})} & {AP (\si{\centi\metre})} & {SI (\si{\centi\metre})} & {H:W} & {BWT (\si{\milli\metre})} \\
+\midrule
+50  & 5.4  & 4.3 & 4.1  & 0.76 & 2.8 \\
+100 & 6.6  & 5.3 & 5.4  & 0.82 & 1.8 \\
+200 & 8.0  & 6.4 & 7.5  & 0.94 & 1.3 \\
+300 & 8.8  & 7.0 & 9.3  & 1.06 & 1.3 \\
+500 & 10.4 & 8.3 & 11.0 & 1.06 & 1.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Complete Electrode Model}
+
+The forward problem is solved using the Complete Electrode Model (CEM)~\cite{somersalo1992}, which incorporates electrode contact impedance (\SI{5.0}{\ohm\centi\metre\squared} at \SI{50}{\kilo\hertz}) and shunting effects. The mesh contains $\sim$42{,}000 tetrahedral elements at the default torso size.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{fig1_anatomical_model.png}
+\caption{3D anatomical model showing tissue cross-sections at the electrode plane. The bladder (yellow) sits deep in the pelvis, surrounded by bone (gray), muscle (red), fat (pale yellow), and bowel (purple).}
+\label{fig:anatomy}
+\end{figure}
+
+%% ===================================================================
+\section{Electrode Placement}
+\label{sec:placement}
+
+\subsection{Configuration Sweep}
+
+We swept 319 electrode configurations: 1--4 rings, 4/8/16 electrodes per ring, z-positions from 3 to \SI{12}{\centi\metre}. Key findings:
+
+\begin{itemize}[nosep]
+  \item 2 rings is optimal; additional rings give $<1\%$ improvement.
+  \item $z = \SIrange{9}{10}{\centi\metre}$ (suprapubic region) is the sweet spot.
+  \item 4 electrodes per ring captures $\sim90\%$ of maximum sensitivity.
+  \item 1-ring configurations are $\sim5\times$ worse, confirming axial separation is critical.
+\end{itemize}
+
+\subsection{The Belt}
+
+Eight Ag/AgCl gel electrodes are arranged in two rings on a suprapubic belt (Figure~\ref{fig:belt}):
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+Ring & Height ($z$) & Electrodes & Angular positions \\
+\midrule
+Ring 1 & \SI{9}{\centi\metre} & 4 & $0\degree, 90\degree, 180\degree, 270\degree$ \\
+Ring 2 & \SI{10}{\centi\metre} & 4 & $0\degree, 90\degree, 180\degree, 270\degree$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All electrodes are on the anterior abdomen. Anterior-only placement loses only 13\% sensitivity versus anterior-posterior placement, and with SVD optimization actually achieves 104\% of full-wrap sensitivity.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{writeup_fig1_belt_placement.png}
+\caption{Belt placement: axial (top-down) and sagittal (side) views showing electrode positions, tissue layers, and distance to bladder.}
+\label{fig:belt}
+\end{figure}
+
+%% ===================================================================
+\section{Optimal 4-Electrode Configuration}
+\label{sec:4elec}
+
+A tetrapolar measurement uses one pair of electrodes to inject current and another pair to measure the resulting voltage difference. This eliminates contact impedance from the measurement but constrains the current to a single path.
+
+\subsection{The Sensitivity Ceiling}
+
+The pelvis contains massive parallel conductance paths: muscle (\SI{0.35}{\siemens\per\metre}), blood vessels (\SI{0.70}{\siemens\per\metre}), and peritoneal fluid (\SI{1.50}{\siemens\per\metre}). With a single drive pair, Jacobian analysis shows that urine elements have only \textbf{1.3\%} of the average sensitivity.
+
+Exhaustive search of all $\binom{8}{2} \times \binom{6}{2} = 420$ drive-sense configurations yields:
+\begin{equation}
+  \text{Best tetrapolar sensitivity} = \SI{0.22}{\milli\ohm\per\milli\litre}
+\end{equation}
+
+This ceiling holds regardless of total electrode count---if you only use 4 at a time. A \SI{10}{\milli\litre} bladder change produces \SI{2.2}{\milli\ohm} of signal against \SI{20}{\milli\ohm} of respiratory artifact: SNR $\approx 0.1$.
+
+\subsection{Optimal 4-Electrode Pair}
+
+The best tetrapolar configuration drives electrodes 5--7 (cross-ring, posterior-lateral) and senses at electrodes 1--3 (cross-ring, anterior). This routes current through the deep pelvis where the bladder sits.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{fig2_impedance_vs_volume.png}
+\caption{Transfer impedance versus bladder volume for the optimal tetrapolar configuration.}
+\label{fig:impedance_vs_volume}
+\end{figure}
+
+%% ===================================================================
+\section{Optimal 8-Electrode Configuration: SVD Drive Patterns}
+\label{sec:8elec}
+
+\subsection{The Idea}
+
+Instead of driving current through one pair, we drive multiple pairs in sequence and combine the measurements with optimal weights. The weights are computed by SVD of the transfer impedance change matrix.
+
+\subsection{Construction}
+
+\textbf{Step 1: Build the transfer impedance change matrix.} For each of the $\binom{8}{2} = 28$ drive pairs and 28 sense pairs, compute the 4-electrode transfer impedance at \SI{100}{\milli\litre} and \SI{500}{\milli\litre}. The difference, normalized by \SI{400}{\milli\litre}, gives sensitivity $M[d,s]$ in \si{\milli\ohm\per\milli\litre}.
+
+\textbf{Step 2: SVD decomposition.} Compute $\mathbf{M} = \mathbf{U} \mathbf{S} \mathbf{V}^\mathsf{T}$. The singular values $s_k$ give the sensitivity of each mode:
+
+\begin{table}[h]
+\centering
+\caption{SVD singular values and sensitivity.}
+\label{tab:svd}
+\begin{tabular}{@{}lS[table-format=1.2]S[table-format=1.2]l@{}}
+\toprule
+{Rank} & {Singular value} & {Sensitivity (\si{\milli\ohm\per\milli\litre})} & {vs.\ tetrapolar} \\
+\midrule
+1 & 0.93 & 0.93 & $4.3\times$ \\
+2 & 0.91 & 0.91 & --- \\
+3 & 0.26 & 0.26 & --- \\
+\midrule
+Cumulative rank-3 & {---} & 1.33 & $6.1\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Step 3: Implement rank-1.} The first left singular vector $\mathbf{u}_1 = \mathbf{U}[:,0]$ gives optimal drive weights; $\mathbf{v}_1 = \mathbf{V}[0,:]$ gives optimal sense weights. The combined measurement is:
+\begin{equation}
+  Z_\text{SVD} = \mathbf{u}_1^\mathsf{T} \, \mathbf{Z}_\text{meas} \, \mathbf{v}_1
+  \label{eq:svd_combine}
+\end{equation}
+
+In practice, the AD5940 cycles through 2 programmed drive patterns per measurement cycle ($\sim$\SI{20}{\milli\second} total).
+
+\subsection{Why SVD, Not Simple Sensitivity Weighting}
+
+Naively weighting each pair by its individual bladder sensitivity performs \emph{worse} than the single best pair (Figure~\ref{fig:svd_voting}). The reason: electrode pairs are highly correlated---pairs that are sensitive to the bladder are also sensitive to bowel gas and muscle (correlation $= -0.88$). SVD finds the linear combination where bladder components add constructively while non-bladder components partially cancel.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{why_svd_not_voting.png}
+\caption{Comparison of tetrapolar, naive sensitivity voting, and SVD rank-1. Left: bladder signal. Center: bowel gas noise. Right: signal-to-interference ratio. Naive voting is worse than tetrapolar; SVD maximizes the ratio.}
+\label{fig:svd_voting}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{writeup_fig6_svd_tutorial.png}
+\caption{SVD step-by-step tutorial. Row~1: single tetrapolar measurement. Row~2: all 28 drive pairs ranked by sensitivity. Row~3: measurement matrix and SVD decomposition. Row~4: tetrapolar vs SVD rank-1 comparison.}
+\label{fig:svd_tutorial}
+\end{figure}
+
+%% ===================================================================
+\section{Signal Processing Algorithm}
+\label{sec:signal}
+
+The raw bioimpedance signal is dominated by artifacts. The signal processing chain extracts the bladder filling trend through four stages (Figure~\ref{fig:signal_chain}).
+
+\subsection{Stage 1: Band-Stop Filter (\SIrange{0.15}{0.4}{\hertz})}
+
+Respiratory artifact is quasi-periodic at 12--20 breaths/min (\SIrange{0.2}{0.33}{\hertz}). A 4th-order Butterworth band-stop filter reduces it from $\sim$\SI{20}{\milli\ohm} to $\sim$\SI{1.3}{\milli\ohm} ($15\times$ reduction).
+
+\subsection{Stage 2: Low-Pass Filter ($< \SI{0.08}{\hertz}$)}
+
+Removes cardiac artifact ($\sim$\SI{3}{\milli\ohm} at \SI{1}{\hertz}) and residual respiratory harmonics. The bladder signal changes over minutes, so frequencies above \SI{0.08}{\hertz} are irrelevant.
+
+\subsection{Stage 3: Polynomial Baseline Detrending}
+
+Electrode drift ($\sim$\SI{5}{\micro\ohm\per\second}) causes a slow baseline shift. A sliding-window polynomial fit (5-minute window, 2nd--3rd order) removes this while preserving the bladder filling slope.
+
+\subsection{Stage 4: Calibration and Volume Estimation}
+
+The detrended signal is divided by the patient-specific sensitivity factor (\si{\milli\ohm\per\milli\litre}), established from a known void event:
+\begin{equation}
+  \Delta V_\text{bladder}(t) = \frac{Z_\text{filtered}(t) - Z_\text{baseline}}{k_\text{cal}}
+  \label{eq:volume}
+\end{equation}
+where $k_\text{cal} = \Delta Z_\text{void} / V_\text{void}$.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{explain_breathing_filter.png}
+\caption{Breathing artifact rejection step by step. Left: time domain. Right: frequency domain. Row~1: raw signal (breathing dominates). Row~2: band-stop filter removes breathing. Row~3: low-pass removes cardiac. Row~4: detrending extracts the bladder volume trend.}
+\label{fig:signal_chain}
+\end{figure}
+
+\subsection{Complete Algorithm}
+
+\begin{lstlisting}[caption={Firmware pseudocode for the 8-electrode SVD rank-1 configuration.}]
+PER MEASUREMENT CYCLE (~20 ms):
+  1. Set MUX to SVD drive pattern 1
+     -> measure voltage at all sense pairs
+  2. Set MUX to SVD drive pattern 2
+     -> measure voltage at all sense pairs
+  3. Combine: Z_svd = u1 . Z_meas . v1
+  4. Store Z_svd in circular buffer
+
+PER PROCESSING CYCLE (every 100 ms):
+  1. Band-stop filter: 0.15-0.4 Hz, 4th-order Butterworth
+  2. Low-pass filter: < 0.08 Hz, 3rd-order Butterworth
+  3. Polynomial baseline removal (5-min sliding window)
+  4. Volume_change = filtered_dZ / calibration_factor
+
+CALIBRATION (once per session):
+  1. Patient breathes normally for 30 seconds
+     -> firmware extracts respiratory amplitude (quality check)
+  2. Known void event: record impedance before and after
+  3. calibration_factor = dZ_void / void_volume (mOhm/mL)
+\end{lstlisting}
+
+%% ===================================================================
+\section{Multi-Frequency Analysis}
+\label{sec:multifreq}
+
+\subsection{Beta Dispersion and Spectral Unmixing}
+
+Tissue conductivity increases with frequency due to beta dispersion---cell membranes become transparent to current at higher frequencies. Urine is the exception: as a simple ionic solution, its conductivity is flat at \SI{1.75}{\siemens\per\metre} across \SIrange{1}{500}{\kilo\hertz}.
+
+In principle, measuring at multiple frequencies provides ``fingerprints'' to separate tissue contributions. We tested spectral unmixing at $K=7$ frequencies (\SIrange{5}{500}{\kilo\hertz}).
+
+\subsection{Why It Fails}
+
+All tissue conductivity spectra follow similar beta-dispersion curves, making the templates nearly collinear (Figure~\ref{fig:multifreq}):
+
+\begin{itemize}[nosep]
+  \item Bladder--breathing template correlation: $-0.986$
+  \item Bladder--bowel gas template correlation: $0.986$
+  \item Mixing matrix condition number: $\sim$79
+\end{itemize}
+
+\subsection{Dual-Frequency Subtraction}
+
+The simplest approach---$Z_\text{iso} = Z(\SI{10}{\kilo\hertz}) - \alpha \cdot Z(\SI{500}{\kilo\hertz})$ with $\alpha$ chosen to cancel breathing---also destroys 73\% of the bladder signal and can amplify bowel gas artifacts.
+
+\textbf{At 8 electrodes, dual-frequency hurts.} It only becomes beneficial at 16+ electrodes where SVD rank-3 compensates the sensitivity loss.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{explain_multifreq.png}
+\caption{Multi-frequency signature cancellation. Top: tissue conductivity curves look different in absolute value but nearly identical when normalized. Bottom: dual-frequency subtraction destroys 73\% of bladder signal.}
+\label{fig:multifreq}
+\end{figure}
+
+%% ===================================================================
+\section{BMI Sensitivity Analysis}
+\label{sec:bmi}
+
+Subcutaneous fat thickness is the dominant source of inter-subject variability. The model scales the torso surface with fat: more fat $\to$ larger torso $\to$ electrodes farther from bladder $\to$ lower sensitivity.
+
+\begin{table}[h]
+\centering
+\caption{Sensitivity versus BMI (corrected torso geometry).}
+\label{tab:bmi}
+\begin{tabular}{@{}lS[table-format=1.1]S[table-format=2.1]cS[table-format=1.2]S[table-format=1.4]S[table-format=2.1]@{}}
+\toprule
+{BMI} & {Fat (\si{\centi\metre})} & {Torso (\si{\centi\metre})} & {} & {SVD rank-1} & {Tetrapolar} & {SVD/Tetra} \\
+& & {$r_x \times r_y$} & & {(\si{\milli\ohm\per\milli\litre})} & {(\si{\milli\ohm\per\milli\litre})} & \\
+\midrule
+18 (lean)       & 0.5 & {$14.0 \times 9.0$}  && 3.10 & 0.3168 & {$9.8\times$} \\
+22 (normal)     & 1.0 & {$14.5 \times 9.5$}  && 2.01 & 0.2010 & {$10.0\times$} \\
+25 (average)    & 1.5 & {$15.0 \times 10.0$} && 2.29 & 0.2332 & {$9.8\times$} \\
+28 (overweight) & 2.5 & {$16.0 \times 11.0$} && 1.59 & 0.1646 & {$9.7\times$} \\
+32 (obese I)    & 3.5 & {$17.0 \times 12.0$} && 1.06 & 0.1134 & {$9.3\times$} \\
+36 (obese II)   & 4.5 & {$18.0 \times 13.0$} && 0.74 & 0.0820 & {$9.0\times$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key finding: SVD weights are universal.} Applying the BMI~25 weights to all body types yields $>98\%$ of optimal sensitivity. One firmware works for all patients; only the sensitivity scaling factor needs per-patient calibration.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{bmi_sweep.png}
+\caption{BMI sweep results. Top-left: sensitivity drops 76\% from lean to obese. Top-right: SVD improvement ratio is stable ($\sim$9--10$\times$). Bottom: universal weights (from BMI~25) achieve $>$98\% efficiency across all body types.}
+\label{fig:bmi}
+\end{figure}
+
+%% ===================================================================
+\section{Noise Budget and Accuracy}
+\label{sec:noise}
+
+\subsection{Noise Sources}
+
+\begin{table}[h]
+\centering
+\caption{Noise budget for the 8-electrode SVD rank-1 configuration at BMI~25.}
+\label{tab:noise}
+\begin{tabular}{@{}lS[table-format=2.1]S[table-format=2.0]l@{}}
+\toprule
+{Source} & {Magnitude (\si{\milli\ohm})} & {\% of total} & {Mitigation} \\
+\midrule
+Electronic (1s avg) & 0.013 & 0 & Inherent averaging \\
+Respiratory (after bandstop) & 1.6 & 7 & Band-stop filter \\
+Bowel gas & 5.8 & 93 & SVD spatial focusing \\
+Electrode drift (1 min) & 0.3 & 0 & Polynomial detrend \\
+\midrule
+\textbf{Total} & \textbf{6.0} & \textbf{100} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Electronic noise is negligible after 1~second of averaging ($\sim$100 measurements at \SI{50}{\kilo\hertz}). The dominant source is bowel gas, which is anatomically adjacent to the bladder, frequency-flat (an insulator), and can only be mitigated by spatial focusing (SVD) and temporal averaging.
+
+\subsection{Volume Resolution}
+
+\begin{table}[h]
+\centering
+\caption{Head-to-head comparison: 4-electrode vs 8-electrode.}
+\label{tab:headtohead}
+\begin{tabular}{@{}lll@{}}
+\toprule
+{Metric} & {4-elec tetrapolar} & {8-elec SVD rank-1} \\
+\midrule
+Hardware              & Same belt           & Same belt \\
+Firmware              & 1 drive pattern     & 2 drive patterns \\
+Sensitivity           & \SI{0.22}{\milli\ohm\per\milli\litre} & \SI{0.94}{\milli\ohm\per\milli\litre} \\
+Resolution (1s)       & $\sim$\SI{44}{\milli\litre} & $\sim$\SI{6}{\milli\litre} \\
+Resolution (10s)      & $\sim$\SI{31}{\milli\litre} & $\sim$\SI{4}{\milli\litre} \\
+Meets \SI{7}{\milli\litre} target? & No & \textbf{Yes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{writeup_fig4_comparison.png}
+\caption{Head-to-head dashboard: sensitivity, noise budget, volume resolution with clinical targets, and summary.}
+\label{fig:comparison}
+\end{figure}
+
+%% ===================================================================
+\section{Anterior-Only Placement}
+\label{sec:anterior}
+
+All electrodes on the anterior abdomen (no back electrodes) is strongly preferred for practical use. We compared five configurations:
+
+\begin{enumerate}[nosep]
+  \item 4-electrode full wrap ($0\degree, 90\degree, 180\degree, 270\degree$)
+  \item 4-electrode anterior only ($30\degree, 70\degree, 110\degree, 150\degree$)
+  \item 8-electrode full wrap (2 rings)
+  \item 8-electrode anterior only (2 rings)
+  \item 8-electrode anterior only (1 ring, dense)
+\end{enumerate}
+
+With SVD optimization, 8-electrode anterior-only achieves \textbf{104\%} of full-wrap sensitivity. For 4 electrodes, anterior-only is $3.2\times$ \emph{better} than full-wrap because the lateral/posterior electrodes in full-wrap are too far from the bladder.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{writeup_fig5_anterior_comparison.png}
+\caption{Anterior-only versus full-wrap comparison for both 4-electrode and 8-electrode configurations.}
+\label{fig:anterior}
+\end{figure}
+
+%% ===================================================================
+\section{Clinical Implementation}
+\label{sec:implementation}
+
+\subsection{Hardware}
+
+\begin{lstlisting}[caption={Hardware specification.}]
+Belt:
+  - 8 x Ag/AgCl gel electrodes (10 mm diameter)
+  - 2 rings at z=9 cm and z=10 cm above pelvic floor
+  - 4 electrodes per ring at 0, 90, 180, 270 degrees
+  - Elastic strap, anterior abdomen only
+
+Electronics:
+  - AD5940 analog front-end (single chip)
+  - 50 kHz excitation, 1 mA peak drive current
+  - 8:1 analog multiplexer for electrode switching
+  - Measurement rate: ~100 Hz (10 ms per drive pattern)
+  - SVD patterns stored in firmware lookup table
+  - Battery life: >24 hours on coin cell
+\end{lstlisting}
+
+\subsection{Expected Performance}
+
+\begin{table}[h]
+\centering
+\caption{Expected performance of the 8-electrode SVD rank-1 device.}
+\label{tab:performance}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Metric & Value \\
+\midrule
+Sensitivity (BMI 25) & \SI{0.94}{\milli\ohm\per\milli\litre} \\
+Volume resolution (1s) & $\sim$\SI{6}{\milli\litre} \\
+Volume resolution (10s) & $\sim$\SI{4}{\milli\litre} \\
+Minimum detectable change & $\sim$\SI{5}{\milli\litre} (SNR $> 1$) \\
+Clinical target & \SI{7}{\milli\litre} --- \textbf{achievable} \\
+Update rate & \SI{0.1}{\hertz} \\
+Belt application & $<$ 2 minutes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Upgrading to 16 Electrodes}
+
+For applications requiring better than \SI{6}{\milli\litre} resolution (target: \SI{0.015}{\milli\litre\per\kilo\gram\per\hour} $= \SI{1}{\milli\litre}$):
+
+\begin{itemize}[nosep]
+  \item 8 electrodes per ring (16 total), SVD rank-3 (4 sequential measurements)
+  \item Dual-frequency excitation (\SI{10}{\kilo\hertz} + \SI{500}{\kilo\hertz})
+  \item Estimated sensitivity: $\sim$\SI{1.5}{\milli\ohm\per\milli\litre}
+  \item Estimated resolution: \SIrange{1}{2}{\milli\litre}
+\end{itemize}
+
+%% ===================================================================
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Bowel gas} (93\% of noise budget). Large gas pockets cause \SIrange{6}{10}{\milli\litre} equivalent errors. Mitigation: temporal averaging and flagging rapid transients.
+  \item \textbf{Posture changes} produce $>$\SI{2}{\milli\ohm} shifts. Mitigation: accelerometer gating.
+  \item \textbf{Patient-specific calibration} is essential. Sensitivity varies $\sim$$4\times$ across BMI~18--36.
+  \item \textbf{Simulation vs clinical gap}. The best clinical study (Leonh\"auser et al.~\cite{leonhauser2018}, 16 electrodes) achieved $\sim$32\% error on healthy volunteers. Our simulation predicts $\sim$\SI{6}{\milli\litre} resolution, which has not been validated clinically for SVD-optimal patterns.
+  \item \textbf{Male pelvis only}. Female pelvic geometry differs (wider pelvis, no prostate, uterus).
+  \item \textbf{The \SI{1}{\milli\litre} target is NOT achievable with 8 electrodes.} This requires 16+ electrodes with SVD rank-3 and dual-frequency excitation.
+\end{enumerate}
+
+%% ===================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This simulation study demonstrates that SVD-optimal drive patterns provide a $4.3\times$ sensitivity improvement over conventional tetrapolar measurement, using the same 8-electrode suprapubic belt. The improvement is entirely in firmware: the AD5940 cycles through 2 programmed drive patterns instead of 1, and multiplies the voltages by precomputed weights.
+
+The recommended configuration for the clinical target of \SI{0.1}{\milli\litre\per\kilo\gram\per\hour}:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Parameter & Value \\
+\midrule
+Electrodes & 8 (4/ring $\times$ 2 rings at $z = 9, \SI{10}{\centi\metre}$) \\
+Placement & Anterior-only suprapubic belt \\
+Frequency & \SI{50}{\kilo\hertz}, single \\
+Drive pattern & SVD rank-1 (2 sequential patterns) \\
+Signal processing & Band-stop + low-pass + polynomial detrend \\
+Calibration & Void-event sensitivity factor \\
+Resolution & $\sim$\SI{6}{\milli\litre} (1s), $\sim$\SI{4}{\milli\litre} (10s) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The SVD drive weights are universal across body types ($>$98\% efficiency from BMI~18 to~36), so a single firmware image works for all patients. Only the sensitivity scaling factor requires per-patient calibration.
+
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\end{document}
