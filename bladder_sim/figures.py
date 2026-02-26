@@ -715,7 +715,9 @@ def _fig6_multifreq_isolation(results: Dict, fig_dir: Path):
 # =====================================================================
 
 def _plot_cross_section(ax, mesh: TorsoMesh, z_slice: float):
-    """Axial cross-section colored by tissue type."""
+    """Axial cross-section with filled tissue regions."""
+    from matplotlib.tri import Triangulation
+    from scipy.spatial import Delaunay
     ec = mesh.element_centroids()
     labels = get_tissue_labels(mesh)
 
@@ -730,8 +732,20 @@ def _plot_cross_section(ax, mesh: TorsoMesh, z_slice: float):
 
     cmap = ListedColormap(TISSUE_COLORS)
     norm = BoundaryNorm(np.arange(-0.5, len(TISSUE_NAMES) + 0.5), len(TISSUE_NAMES))
-    sc = ax.scatter(cx, cy, c=lbl, cmap=cmap, norm=norm, s=6, edgecolors="none")
-    cbar = plt.colorbar(sc, ax=ax, ticks=range(len(TISSUE_NAMES)), shrink=0.85)
+
+    # Delaunay triangulation of centroids for filled rendering
+    pts = np.column_stack([cx, cy])
+    tri = Delaunay(pts)
+    # Color each Delaunay triangle by the majority label of its 3 vertices
+    tri_labels = np.round(np.mean(lbl[tri.simplices], axis=1)).astype(int)
+    tri_labels = np.clip(tri_labels, 0, len(TISSUE_NAMES) - 1)
+    triang = Triangulation(cx, cy, tri.simplices)
+    ax.tripcolor(triang, facecolors=tri_labels, cmap=cmap, norm=norm,
+                 edgecolors="none", linewidth=0)
+
+    sm = ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, ticks=range(len(TISSUE_NAMES)), shrink=0.85)
     cbar.ax.set_yticklabels(TISSUE_NAMES, fontsize=8)
 
     theta = np.linspace(0, 2 * np.pi, 200)
@@ -742,7 +756,9 @@ def _plot_cross_section(ax, mesh: TorsoMesh, z_slice: float):
 
 
 def _plot_sagittal_section(ax, mesh: TorsoMesh, x_slice: float):
-    """Sagittal (y-z) cross-section."""
+    """Sagittal (y-z) cross-section with filled tissue regions."""
+    from matplotlib.tri import Triangulation
+    from scipy.spatial import Delaunay
     ec = mesh.element_centroids()
     labels = get_tissue_labels(mesh)
 
@@ -757,8 +773,19 @@ def _plot_sagittal_section(ax, mesh: TorsoMesh, x_slice: float):
 
     cmap = ListedColormap(TISSUE_COLORS)
     norm = BoundaryNorm(np.arange(-0.5, len(TISSUE_NAMES) + 0.5), len(TISSUE_NAMES))
-    sc = ax.scatter(cy, cz, c=lbl, cmap=cmap, norm=norm, s=6, edgecolors="none")
-    cbar = plt.colorbar(sc, ax=ax, ticks=range(len(TISSUE_NAMES)), shrink=0.85)
+
+    # Delaunay triangulation of centroids for filled rendering
+    pts = np.column_stack([cy, cz])
+    tri = Delaunay(pts)
+    tri_labels = np.round(np.mean(lbl[tri.simplices], axis=1)).astype(int)
+    tri_labels = np.clip(tri_labels, 0, len(TISSUE_NAMES) - 1)
+    triang = Triangulation(cy, cz, tri.simplices)
+    ax.tripcolor(triang, facecolors=tri_labels, cmap=cmap, norm=norm,
+                 edgecolors="none", linewidth=0)
+
+    sm = ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, ticks=range(len(TISSUE_NAMES)), shrink=0.85)
     cbar.ax.set_yticklabels(TISSUE_NAMES, fontsize=8)
     ax.set_xlabel("Y (cm)")
     ax.set_ylabel("Z (cm)")
