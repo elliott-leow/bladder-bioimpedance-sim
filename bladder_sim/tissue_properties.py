@@ -67,6 +67,10 @@ CONDUCTIVITY_DB = {
     # Peritoneal fluid (transudate; high ionic content like interstitial)
     "peritoneal": np.array([1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50, 1.50]),
 
+    # Prostate (glandular + fibromuscular stroma; well-vascularised)
+    # IT'IS Foundation v4.1 + Gabriel parametric model for glandular tissue
+    "prostate": np.array([0.300, 0.340, 0.370, 0.400, 0.420, 0.460, 0.500, 0.550]),
+
     # Background (connective tissue / fascia / unclassified soft tissue)
     "background": np.array([0.200, 0.230, 0.250, 0.275, 0.300, 0.340, 0.380, 0.440]),
 }

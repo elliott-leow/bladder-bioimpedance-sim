@@ -33,7 +33,8 @@ from bladder_sim.model import (
     BLADDER_ASPECT,
     BLADDER_CENTER_Y,
     BLADDER_BASE_Z,
-    BLADDER_WALL_THICK,
+    BLADDER_WALL_THICK_EMPTY,
+    bladder_wall_thickness,
     SKIN_THICK,
     FAT_THICK,
     MUSCLE_THICK,
@@ -324,7 +325,7 @@ def generate_protocol(pred):
       f"{get_conductivity('fat', 50):.3f} S/m")
     s(f"  Muscle          {pred['muscle_thick_cm']:.1f} cm       "
       f"{get_conductivity('muscle', 50):.3f} S/m")
-    s(f"  Bladder wall    {BLADDER_WALL_THICK:.1f} cm       "
+    s(f"  Bladder wall    {bladder_wall_thickness(300)*10:.1f} mm (at 300mL)  "
       f"{get_conductivity('bladder_wall', 50):.3f} S/m")
     s(f"  Urine           variable     "
       f"{get_conductivity('urine', 50):.3f} S/m (freq-independent)")
@@ -821,7 +822,8 @@ def generate_protocol(pred):
         avg_d = np.mean(dims)
         s(f"  {vol:5.0f}     {dims[0]:6.1f}        {dims[1]:6.1f}    {dims[2]:6.1f}     ~{avg_d:.1f} cm avg")
     s()
-    s(f"  Bladder wall thickness: {BLADDER_WALL_THICK:.1f} cm")
+    s(f"  Bladder wall thickness: {bladder_wall_thickness(50)*10:.1f} mm (empty) to "
+      f"{bladder_wall_thickness(500)*10:.1f} mm (500 mL)")
     s(f"  Urine conductivity:     {get_conductivity('urine', 50):.2f} S/m (freq-independent)")
     s(f"  Wall conductivity:      {get_conductivity('bladder_wall', 50):.3f} S/m at 50 kHz")
     s()

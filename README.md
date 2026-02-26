@@ -1,6 +1,6 @@
 # Bladder Bioimpedance Simulation
 
-3D FEM simulation of bioimpedance for detecting bladder urine volume and optimizing electrode placement. Uses the Complete Electrode Model (CEM) on a tetrahedral mesh with frequency-dependent tissue conductivities from Gabriel et al. 1996.
+3D FEM simulation of bioimpedance for detecting bladder urine volume and optimizing electrode placement. Uses the Complete Electrode Model (CEM) on a tetrahedral mesh with frequency-dependent tissue conductivities from Gabriel et al. 1996 and IT'IS Foundation v4.1.
 
 ## Quick Start
 
@@ -39,10 +39,10 @@ pip install -r requirements.txt
 ```
 ├── bladder_sim/                 # Core simulation package
 │   ├── __init__.py
-│   ├── tissue_properties.py     # Gabriel et al. 1996 conductivity database + noise model
+│   ├── tissue_properties.py     # Gabriel 1996 + IT'IS v4.1 conductivity database + noise model
 │   ├── mesh.py                  # Structured tetrahedral mesh generation
 │   ├── fem.py                   # FEM forward solver (CEM), Jacobian, transfer impedance
-│   ├── model.py                 # 3D anatomical pelvis model (14 tissue types)
+│   ├── model.py                 # 3D anatomical male pelvis model (15 tissue types)
 │   ├── analysis.py              # Sensitivity, pattern optimization, frequency sweep
 │   └── figures.py               # Publication-quality figure generation
 ├── run_simulation.py            # Main simulation runner
@@ -59,7 +59,7 @@ python run_simulation.py
 ```
 
 This runs:
-1. Model construction (3D pelvis with skin, fat, muscle, bone, organs, bladder)
+1. Model construction (3D male pelvis with 15 tissue types)
 2. Forward solve validation
 3. Sensitivity analysis (impedance vs. bladder volume)
 4. Exhaustive 4-electrode stimulation pattern optimization
@@ -94,11 +94,17 @@ Generates `protocol.txt` — a complete lab bench protocol for validating simula
 ## Simulation Model
 
 ### Anatomy
-The pelvis model includes 14 tissue regions arranged in anatomically realistic geometry:
-- **Outer shells**: skin (0.2 cm), subcutaneous fat (1.5 cm), skeletal muscle (1.5 cm)
-- **Pelvic bone**: iliac wings, sacrum/spine, pubic symphysis, posterior ring
-- **Soft organs**: bowel, rectum, iliac vessels, peritoneal fluid
-- **Bladder**: detrusor wall + urine (ellipsoidal, volume-scalable 50-500 mL)
+The male pelvis model includes 15 tissue regions arranged in anatomically realistic geometry:
+- **Outer shells**: skin (2 mm), subcutaneous fat (1.5 cm, configurable), skeletal muscle (1.5 cm)
+- **Pelvic bone**: iliac wings, sacrum/spine + sacral alae, pubic symphysis, posterior ring
+- **Soft organs**: bowel, rectum, iliac vessels, peritoneal fluid, prostate
+- **Bladder**: detrusor wall (volume-dependent thickness) + urine (ellipsoidal, 50-500 mL)
+
+Key anatomical features:
+- **Volume-dependent bladder wall**: BWT decreases from ~2.8 mm (empty) to ~1.5 mm (500 mL), per sonographic data (Oelke et al. 2006)
+- **Prostate gland**: 4.0 x 3.0 x 2.5 cm, inferior to bladder base
+- **Sacral alae**: lateral wings connecting sacrum to iliac bones
+- **Configurable fat thickness**: dominant source of inter-subject variability (Leonhardt et al. 2025)
 
 ### Physics
 - Complete Electrode Model (CEM) on tetrahedral FEM mesh
@@ -109,14 +115,17 @@ The pelvis model includes 14 tissue regions arranged in anatomically realistic g
 ### Key Results
 - **Sensitivity**: ~0.1-0.2 mOhm/mL (best channel, anterior-posterior drive)
 - **Optimal frequency**: SNR peaks near 25-50 kHz
-- **Artifact rejection**: Dual-frequency subtraction (10 + 200 kHz) provides >10x respiratory artifact cancellation in simulation
+- **Artifact rejection**: Dual-frequency subtraction provides >10x respiratory artifact cancellation in simulation
 
 ## References
 
 - Gabriel C, Gabriel S, Corthout E. *Phys. Med. Biol.* 41:2231-2249, 1996.
 - Gabriel S, Lau RW, Gabriel C. *Phys. Med. Biol.* 41:2251, 1996.
 - Gabriel S, Lau RW, Gabriel C. *Phys. Med. Biol.* 41:2271, 1996.
+- IT'IS Foundation. *Tissue Properties Database v4.1*. Zurich.
 - Somersalo E, Cheney M, Isaacson D. *SIAM J. Appl. Math.* 52(4):1023-1040, 1992.
 - Adler A, Lionheart WRB. *Physiol. Meas.* 27:S25-S42, 2006.
 - Rosell J et al. *IEEE Trans. Biomed. Eng.* 35(8):649-651, 1988.
 - Schlebusch T et al. *Physiol. Meas.* 35(9):1813-1823, 2014.
+- Oelke M et al. *Eur. Urol.* 2006. (Bladder wall thickness)
+- Leonhardt S et al. *npj Digital Medicine* 2025. (Digital twin electrode optimization)

@@ -6,8 +6,9 @@ Bladder Bioimpedance Simulation — Main Runner
 3D FEM simulation to determine whether bioimpedance can detect urine
 output and to optimize electrode placement.
 
-Replicates the EIDORS-based MATLAB simulation using pure Python
-(numpy + scipy + matplotlib).
+Pure Python implementation (numpy + scipy + matplotlib).
+Male pelvis model with 15 tissue types, volume-dependent bladder wall,
+Complete Electrode Model (CEM).
 
 Usage:
     python run_simulation.py              # Full simulation

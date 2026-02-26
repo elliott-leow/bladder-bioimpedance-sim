@@ -29,7 +29,7 @@ from typing import Dict, Optional
 
 from .model import (
     TISSUE_NAMES, TISSUE_COLORS, BLADDER_ASPECT, BLADDER_BASE_Z,
-    BLADDER_CENTER_Y, BLADDER_WALL_THICK, TORSO_RX, TORSO_RY, TORSO_H,
+    BLADDER_CENTER_Y, TORSO_RX, TORSO_RY, TORSO_H,
     get_tissue_labels, get_bladder_mask,
 )
 from .mesh import TorsoMesh, compute_electrode_positions

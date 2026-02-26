@@ -1,14 +1,21 @@
 """
 Anatomical pelvis model for bladder bioimpedance simulation.
 
-Builds a 3D FEM model with 14 tissue types:
+Builds a 3D FEM model of the male pelvis with 15 tissue types:
     Outer shells: skin, subcutaneous fat, skeletal muscle
-    Pelvic bone: iliac wings (L/R), sacrum/spine, pubic symphysis, pelvic ring
-    Soft organs: bowel, rectum, iliac vessels, peritoneal fluid
-    Bladder: detrusor wall, urine
+    Pelvic bone: iliac wings (L/R), sacrum/spine + sacral alae,
+                 pubic symphysis, posterior pelvic ring
+    Soft organs: bowel, rectum, iliac vessels, peritoneal fluid, prostate
+    Bladder: detrusor wall (volume-dependent thickness), urine
     Background: connective tissue / fascia
 
-All geometry in cm. Conductivities from Gabriel et al. 1996.
+All geometry in cm. Conductivities from Gabriel et al. 1996 + IT'IS v4.1.
+
+Anatomical sources:
+    Pelvimetry: StatPearls (pelvic inlet/outlet dimensions)
+    Bladder wall: Oelke et al. 2006, Hakenberg et al. 2000 (sonographic BWT)
+    Prostate: StatPearls, Kenhub (dimensions, position)
+    Bone: sacral morphometric studies (ala dimensions)
 """
 
 import numpy as np
@@ -38,9 +45,14 @@ MUSCLE_THICK = 1.5
 
 # Bladder ellipsoid aspect ratio [lateral : AP : SI]
 BLADDER_ASPECT = np.array([5.0, 4.0, 5.0])
-BLADDER_WALL_THICK = 0.3  # cm
-BLADDER_CENTER_Y = 3.0    # anterior position
+BLADDER_CENTER_Y = 3.0    # anterior position (behind pubic symphysis)
 BLADDER_BASE_Z = 3.0      # base height above model origin
+
+# Wall thickness decreases as bladder distends (detrusor muscle stretching).
+# Sonographic data: Oelke et al. 2006, Hakenberg et al. 2000, SAGE J. 2018.
+#   BWT ≈ 2.8 mm nearly empty → ≈ 1.5 mm at 500 mL
+BLADDER_WALL_THICK_EMPTY = 0.28  # cm, near-empty bladder
+BLADDER_WALL_THICK_FULL = 0.15   # cm, at ~500 mL
 
 # Default electrode configuration
 DEFAULT_N_PER_RING = 16
@@ -48,6 +60,22 @@ DEFAULT_RING_Z = np.array([4.0, 6.0, 8.0, 10.0])
 DEFAULT_ELEC_RADIUS = 0.5
 DEFAULT_MAX_EDGE = 1.0
 DEFAULT_CURRENT_A = 0.001
+
+# Prostate geometry (male model)
+PROSTATE_CENTER = np.array([0.0, 3.5, 2.0])  # inferior to bladder base, anterior
+PROSTATE_SEMI = np.array([2.0, 1.5, 1.25])   # 4.0 x 3.0 x 2.5 cm total
+
+
+def bladder_wall_thickness(volume_mL: float) -> float:
+    """Volume-dependent bladder wall thickness in cm.
+
+    The detrusor muscle thins as the bladder distends.  Based on
+    sonographic measurements (Oelke et al. 2006, Hakenberg et al. 2000):
+        BWT ≈ 2.8 mm when nearly empty, ≈ 1.5 mm at 500 mL.
+    """
+    frac = min(volume_mL, 500.0) / 500.0
+    thick = BLADDER_WALL_THICK_EMPTY - (BLADDER_WALL_THICK_EMPTY - BLADDER_WALL_THICK_FULL) * frac
+    return max(thick, 0.12)  # absolute minimum 1.2 mm
 
 
 def build_pelvis_model(
@@ -60,6 +88,7 @@ def build_pelvis_model(
     elec_radius: float = DEFAULT_ELEC_RADIUS,
     stim_pattern: str = "cross_ring",
     current_A: float = DEFAULT_CURRENT_A,
+    fat_thick: Optional[float] = None,
 ) -> Tuple[ForwardModel, Image]:
     """
     Build a 3D pelvis model with multi-ring electrode array.
@@ -85,12 +114,18 @@ def build_pelvis_model(
         'cross_ring', 'adjacent', or 'none'.
     current_A : float
         Stimulation current amplitude (A).
+    fat_thick : float, optional
+        Subcutaneous fat layer thickness in cm. Defaults to module-level
+        FAT_THICK (1.5 cm). This is the dominant source of inter-subject
+        variability in bioimpedance measurements (Leonhardt et al. 2025).
 
     Returns
     -------
     fmdl : ForwardModel
     img : Image
     """
+    if fat_thick is None:
+        fat_thick = FAT_THICK
     if ring_z is None:
         ring_z = DEFAULT_RING_Z.copy()
     ring_z = np.asarray(ring_z)
@@ -145,6 +180,7 @@ def build_pelvis_model(
     # --- Assign conductivities ---
     # Only print verbose summary on first build (when mesh is created, not reused)
     img = _assign_conductivities(fmdl, bladder_volume_mL, freq_kHz,
+                                 fat_thick=fat_thick,
                                  verbose=(mesh_was_created))
 
     return fmdl, img
@@ -152,7 +188,7 @@ def build_pelvis_model(
 
 def _assign_conductivities(
     fmdl: ForwardModel, bladder_volume_mL: float, freq_kHz: float,
-    verbose: bool = True,
+    fat_thick: float = FAT_THICK, verbose: bool = True,
 ) -> Image:
     """
     Assign frequency-dependent tissue conductivities to mesh elements.
@@ -175,10 +211,11 @@ def _assign_conductivities(
     elem_data = np.full(n_elem, sigma("background", freq_kHz))
 
     # ==================== CONCENTRIC SHELLS ====================
+    # Shell thicknesses: skin 2mm, fat 0.5-4cm (varies with BMI), muscle ~1.5cm
     inner_skin_rx = TORSO_RX - SKIN_THICK
     inner_skin_ry = TORSO_RY - SKIN_THICK
-    inner_fat_rx = inner_skin_rx - FAT_THICK
-    inner_fat_ry = inner_skin_ry - FAT_THICK
+    inner_fat_rx = inner_skin_rx - fat_thick
+    inner_fat_ry = inner_skin_ry - fat_thick
     inner_muscle_rx = inner_fat_rx - MUSCLE_THICK
     inner_muscle_ry = inner_fat_ry - MUSCLE_THICK
 
@@ -237,12 +274,27 @@ def _assign_conductivities(
     )
     is_pelvic_ring = (r_pring_outer < 1) & (r_pring_inner > 1) & (cy < -1.0)
 
+    # Sacral alae (lateral wings connecting sacrum to iliac bones)
+    # Sacral width at S1 ~10 cm; each ala extends ~4 cm from midline
+    r_ala_L = np.sqrt(
+        ((cx - (-4.0)) / 3.0) ** 2
+        + ((cy - (-6.0)) / 1.5) ** 2
+        + ((cz - 4.0) / 2.5) ** 2
+    )
+    r_ala_R = np.sqrt(
+        ((cx - 4.0) / 3.0) ** 2
+        + ((cy - (-6.0)) / 1.5) ** 2
+        + ((cz - 4.0) / 2.5) ** 2
+    )
+
     is_bone = (
         (r_iliac_L < 1)
         | (r_iliac_R < 1)
         | (r_spine < 1)
         | (r_pubis < 1)
         | is_pelvic_ring
+        | (r_ala_L < 1)
+        | (r_ala_R < 1)
     )
     elem_data[is_bone] = sigma("bone_avg", freq_kHz)
 
@@ -288,6 +340,17 @@ def _assign_conductivities(
     is_peritoneal = (r_perit < 1) & ~is_bone & ~(r_rectum < 1)
     elem_data[is_peritoneal] = sigma("peritoneal", freq_kHz)
 
+    # ==================== PROSTATE (male, inferior to bladder) ===========
+    # ~4.0 x 3.0 x 2.5 cm, wraps proximal urethra below bladder neck
+    # Position: inferior to bladder base, behind pubic symphysis
+    r_prostate = np.sqrt(
+        ((cx - PROSTATE_CENTER[0]) / PROSTATE_SEMI[0]) ** 2
+        + ((cy - PROSTATE_CENTER[1]) / PROSTATE_SEMI[1]) ** 2
+        + ((cz - PROSTATE_CENTER[2]) / PROSTATE_SEMI[2]) ** 2
+    )
+    is_prostate = (r_prostate < 1) & ~is_bone
+    elem_data[is_prostate] = sigma("prostate", freq_kHz)
+
     # ==================== BLADDER (highest priority) ====================
     k = (bladder_volume_mL / ((4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT))) ** (
         1.0 / 3.0
@@ -303,7 +366,8 @@ def _assign_conductivities(
     r_bl = np.sqrt(bx ** 2 + by ** 2 + bz ** 2)
     avg_bl = (bl_a + bl_b + bl_c) / 3.0
 
-    is_urine = r_bl < (1.0 - BLADDER_WALL_THICK / avg_bl)
+    wall_thick = bladder_wall_thickness(bladder_volume_mL)
+    is_urine = r_bl < (1.0 - wall_thick / avg_bl)
     is_wall = (r_bl < 1.0) & ~is_urine
 
     elem_data[is_wall] = sigma("bladder_wall", freq_kHz)
@@ -317,8 +381,10 @@ def _assign_conductivities(
         print(
             f"Bladder: {bladder_volume_mL:.0f} mL -> "
             f"{bl_a*2:.1f} x {bl_b*2:.1f} x {bl_c*2:.1f} cm, "
+            f"wall = {wall_thick*10:.1f} mm, "
             f"{n_bl} elems ({100*n_bl/n_total:.1f}%), {np.sum(is_urine)} urine"
         )
+        print(f"Fat layer: {fat_thick:.1f} cm")
         for name, mask, tissue in [
             ("Skin", is_skin, "skin"),
             ("Fat", is_fat, "fat"),
@@ -328,6 +394,7 @@ def _assign_conductivities(
             ("Rectum", is_rectum, "rectum"),
             ("Vessels", is_vessels, "blood"),
             ("Perit.", is_peritoneal, "peritoneal"),
+            ("Prostate", is_prostate, "prostate"),
             ("Bl.wall", is_wall, "bladder_wall"),
             ("Urine", is_urine, "urine"),
         ]:
@@ -338,7 +405,8 @@ def _assign_conductivities(
 
         n_assigned = np.sum(
             is_skin | is_fat | is_muscle | is_bone | is_bowel
-            | is_rectum | is_vessels | is_peritoneal | is_wall | is_urine
+            | is_rectum | is_vessels | is_peritoneal | is_prostate
+            | is_wall | is_urine
         )
         print(
             f"  Backgnd:  {n_total - n_assigned:6d} elems  "
@@ -384,7 +452,8 @@ def get_bladder_mask(
     r_bl = np.sqrt(bx ** 2 + by ** 2 + bz ** 2)
     avg_bl = (bl_a + bl_b + bl_c) / 3.0
 
-    return r_bl < (1.0 - BLADDER_WALL_THICK / avg_bl)
+    wall_thick = bladder_wall_thickness(bladder_volume_mL)
+    return r_bl < (1.0 - wall_thick / avg_bl)
 
 
 def get_tissue_labels(
@@ -440,7 +509,35 @@ def get_tissue_labels(
     r_pubis = np.sqrt(
         (cx / 1.5) ** 2 + ((cy - 7.5) / 1.25) ** 2 + ((cz - 2.5) / 2.0) ** 2
     )
-    is_bone = (r_iliac_L < 1) | (r_iliac_R < 1) | (r_spine < 1) | (r_pubis < 1)
+    # Posterior pelvic ring (shell)
+    pring_rx, pring_ry, pring_rz = 7.0, 5.5, 3.0
+    pring_cz = 3.0
+    pring_thick = 1.2
+    avg_pring = (pring_rx + pring_ry) / 2.0
+    inner_frac = 1.0 - pring_thick / avg_pring
+    r_pring_outer = np.sqrt(
+        (cx / pring_rx) ** 2 + (cy / pring_ry) ** 2
+        + ((cz - pring_cz) / pring_rz) ** 2
+    )
+    r_pring_inner = np.sqrt(
+        (cx / (pring_rx * inner_frac)) ** 2
+        + (cy / (pring_ry * inner_frac)) ** 2
+        + ((cz - pring_cz) / pring_rz) ** 2
+    )
+    is_pelvic_ring = (r_pring_outer < 1) & (r_pring_inner > 1) & (cy < -1.0)
+    # Sacral alae
+    r_ala_L = np.sqrt(
+        ((cx + 4.0) / 3.0) ** 2 + ((cy + 6.0) / 1.5) ** 2
+        + ((cz - 4.0) / 2.5) ** 2
+    )
+    r_ala_R = np.sqrt(
+        ((cx - 4.0) / 3.0) ** 2 + ((cy + 6.0) / 1.5) ** 2
+        + ((cz - 4.0) / 2.5) ** 2
+    )
+    is_bone = (
+        (r_iliac_L < 1) | (r_iliac_R < 1) | (r_spine < 1) | (r_pubis < 1)
+        | is_pelvic_ring | (r_ala_L < 1) | (r_ala_R < 1)
+    )
     labels[is_bone] = 4
 
     # Organs
@@ -467,7 +564,15 @@ def get_tissue_labels(
     )
     labels[(r_perit < 1) & ~is_bone & ~(r_rectum < 1)] = 8
 
-    # Bladder
+    # Prostate (male)
+    r_prostate = np.sqrt(
+        ((cx - PROSTATE_CENTER[0]) / PROSTATE_SEMI[0]) ** 2
+        + ((cy - PROSTATE_CENTER[1]) / PROSTATE_SEMI[1]) ** 2
+        + ((cz - PROSTATE_CENTER[2]) / PROSTATE_SEMI[2]) ** 2
+    )
+    labels[(r_prostate < 1) & ~is_bone] = 11
+
+    # Bladder (highest priority)
     k = (bladder_volume_mL / ((4.0 / 3.0) * np.pi * np.prod(BLADDER_ASPECT))) ** (
         1.0 / 3.0
     )
@@ -482,7 +587,8 @@ def get_tissue_labels(
     r_bl = np.sqrt(bx ** 2 + by ** 2 + bz ** 2)
     avg_bl = (bl_a + bl_b + bl_c) / 3.0
 
-    is_urine = r_bl < (1.0 - BLADDER_WALL_THICK / avg_bl)
+    wall_thick = bladder_wall_thickness(bladder_volume_mL)
+    is_urine = r_bl < (1.0 - wall_thick / avg_bl)
     is_wall = (r_bl < 1.0) & ~is_urine
 
     labels[is_wall] = 9
@@ -492,17 +598,18 @@ def get_tissue_labels(
 
 
 TISSUE_NAMES = [
-    "Background",
-    "Skin",
-    "Fat",
-    "Muscle",
-    "Bone",
-    "Bowel",
-    "Rectum",
-    "Vessels",
-    "Peritoneal",
-    "Bladder Wall",
-    "Urine",
+    "Background",    # 0
+    "Skin",          # 1
+    "Fat",           # 2
+    "Muscle",        # 3
+    "Bone",          # 4
+    "Bowel",         # 5
+    "Rectum",        # 6
+    "Vessels",       # 7
+    "Peritoneal",    # 8
+    "Bladder Wall",  # 9
+    "Urine",         # 10
+    "Prostate",      # 11
 ]
 
 TISSUE_COLORS = np.array(
@@ -518,5 +625,6 @@ TISSUE_COLORS = np.array(
         [0.300, 0.700, 0.900],  # peritoneal (cyan)
         [0.400, 0.600, 0.400],  # bladder wall (green)
         [1.000, 1.000, 0.200],  # urine (bright yellow)
+        [0.850, 0.600, 0.400],  # prostate (tan-orange)
     ]
 )

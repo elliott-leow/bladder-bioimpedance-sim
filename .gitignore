@@ -7,9 +7,4 @@ build/
 .DS_Store
 figures/
 protocol.txt
-*.asv
-*.mat
-*.fig
-*.mex*
 *.log
-slprj/
